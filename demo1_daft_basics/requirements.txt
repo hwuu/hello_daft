@@ -1,0 +1,5 @@
+daft[openai]>=0.7.2
+pyarrow
+pandas
+faker
+pydantic

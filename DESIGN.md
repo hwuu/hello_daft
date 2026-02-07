@@ -66,6 +66,12 @@ Demo 4: 综合应用 - 数据清洗管道
    - 延迟执行和查询优化
    - 性能对比（Daft vs Pandas）
 
+5. **AI Functions 与多模态**
+   - 文本分类（classify_text）
+   - 文本嵌入（embed_text）
+   - 语义搜索（cosine_distance）
+   - LLM 结构化提取（prompt）
+
 **示例数据集**：
 - 电商产品数据（100K 条记录）
 - 包含：产品ID、名称、类别、价格、评分、描述等
@@ -75,17 +81,15 @@ Demo 4: 综合应用 - 数据清洗管道
 demo1_daft_basics/
 ├── README.md                    # Demo 说明文档
 ├── requirements.txt             # 依赖包
-├── notebooks/
+├── notebooks/                   # Notebook 自包含，代码全部内联
 │   ├── 01_introduction.ipynb    # Daft 介绍
 │   ├── 02_basic_operations.ipynb
 │   ├── 03_data_processing.ipynb
-│   └── 04_advanced_features.ipynb
-├── data/
-│   ├── products.csv
-│   └── generate_data.py         # 生成示例数据
-└── src/
-    ├── __init__.py
-    └── examples.py              # 代码示例
+│   ├── 04_advanced_features.ipynb
+│   └── 05_ai_multimodal.ipynb   # AI Functions（需要 OpenAI API Key）
+└── data/
+    ├── products.csv
+    └── generate_data.py         # 生成示例数据
 ```
 
 **关键代码示例**：
@@ -161,11 +165,6 @@ demo2_ray_kubernetes/
 │   ├── ray-operator.yaml
 │   ├── ray-cluster.yaml
 │   └── README.md                # K8s 部署说明
-├── src/
-│   ├── __init__.py
-│   ├── tasks.py                 # Ray tasks 示例
-│   ├── actors.py                # Ray actors 示例
-│   └── image_processing.py      # 图像处理示例
 ├── scripts/
 │   ├── setup_k8s.sh             # K8s 环境设置
 │   ├── deploy_ray.sh            # 部署 Ray 集群
@@ -272,11 +271,6 @@ demo3_lancedb_basics/
 │   ├── 02_basic_operations.ipynb
 │   ├── 03_embeddings.ipynb
 │   └── 04_semantic_search.ipynb
-├── src/
-│   ├── __init__.py
-│   ├── database.py              # LanceDB 操作封装
-│   ├── embeddings.py            # 嵌入生成
-│   └── search.py                # 搜索功能
 ├── data/
 │   ├── reviews.csv
 │   └── generate_reviews.py
@@ -365,19 +359,6 @@ demo4_integrated_pipeline/
 │   ├── 03_cleaning_process.ipynb
 │   ├── 04_embedding_generation.ipynb
 │   └── 05_query_and_validation.ipynb
-├── src/
-│   ├── __init__.py
-│   ├── pipeline/
-│   │   ├── __init__.py
-│   │   ├── ingestion.py         # 数据摄取
-│   │   ├── cleaning.py          # 数据清洗
-│   │   ├── embedding.py         # 嵌入生成
-│   │   └── storage.py           # 存储到 LanceDB
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   ├── config.py
-│   │   └── logging.py
-│   └── main.py                  # 管道编排
 ├── k8s/
 │   ├── namespace.yaml
 │   ├── ray/
@@ -395,11 +376,6 @@ demo4_integrated_pipeline/
 │   ├── raw/
 │   │   └── reviews_raw.csv      # 原始数据
 │   └── processed/               # 处理后数据
-├── tests/
-│   ├── __init__.py
-│   ├── test_ingestion.py
-│   ├── test_cleaning.py
-│   └── test_pipeline.py
 ├── scripts/
 │   ├── generate_sample_data.py  # 生成测试数据
 │   ├── deploy_all.sh            # 一键部署
