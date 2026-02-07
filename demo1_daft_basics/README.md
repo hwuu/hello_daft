@@ -11,6 +11,7 @@
 - ✅ 用户自定义函数（UDF）
 - ✅ Daft 与 Pandas 的性能对比
 - ✅ 延迟执行和查询优化
+- ✅ AI Functions（文本分类、嵌入、语义搜索、LLM 提取）
 
 ## 🎯 适合人群
 
@@ -55,6 +56,13 @@
    - 性能优化技巧
    - Daft vs Pandas 性能对比
 
+5. **05_ai_multimodal.ipynb** - AI Functions 与多模态
+   - 文本分类（classify_text）
+   - 文本嵌入（embed_text）
+   - 语义搜索（cosine_distance）
+   - LLM 结构化提取（prompt）
+   - 需要 OpenAI API Key
+
 ## 🚀 快速开始
 
 ### 1. 安装依赖
@@ -97,6 +105,7 @@ jupyter notebook notebooks/01_introduction.ipynb
 2. 02_basic_operations.ipynb
 3. 03_data_processing.ipynb
 4. 04_advanced_features.ipynb
+5. 05_ai_multimodal.ipynb（需要 OpenAI API Key）
 
 ## 📊 示例数据集
 

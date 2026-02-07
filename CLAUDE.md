@@ -36,14 +36,13 @@
 
 19. 文档中如果要画流程框图，那么框图中的文字用英文，框线要对齐；其余内容保持中文
 
+20. commit message 使用中文
+
 ---
 
 ## 常用命令
 
 ```bash
-# 运行 demo1 单元测试
-PYTHONPATH=. pytest tests/unit/test_demo1_examples.py -v
-
 # 生成 demo1 测试数据（默认 10 万条，可用 --size 调整）
 python demo1_daft_basics/data/generate_data.py --size 1000 --output demo1_daft_basics/data
 
@@ -66,3 +65,7 @@ nbstripout --status
 - `explain()` 返回 `None`（直接打印到 stdout），需用 `io.StringIO` 捕获
 - `fill_null()` 直接在 Expression 上调用
 - `with_columns({})` 支持字典形式批量添加/修改列
+- 无 `is_not_null()` 方法，使用 `not_null()` 替代
+- `is_null()` 返回 Bool 类型，不能直接 `.sum()`，需先 `.cast(daft.DataType.int64())` 再 `.sum()`
+- `column_names` 是属性不是方法，不要加括号
+- `over()` 需要传入 `Window` 对象，不能直接传 Expression，用法：`col("x").mean().over(Window().partition_by("y"))`
