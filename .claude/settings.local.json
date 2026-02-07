@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c:*)",
+      "WebFetch(domain:www.getdaft.io)",
+      "Bash(pip install:*)",
+      "Bash(python demo1_daft_basics/data/generate_data.py --size 1000 --output demo1_daft_basics/data)",
+      "Bash(PYTHONPATH=. pytest tests/unit/test_demo1_examples.py -v)",
+      "Bash(git init:*)",
+      "Bash(nbstripout:*)",
+      "Bash(git -C /home/hwuu/dev/github/hwuu/hello_daft status)",
+      "Bash(git -C /home/hwuu/dev/github/hwuu/hello_daft diff)",
+      "Bash(git -C /home/hwuu/dev/github/hwuu/hello_daft log:*)",
+      "Bash(git -C /home/hwuu/dev/github/hwuu/hello_daft branch:*)",
+      "Bash(git -C /home/hwuu/dev/github/hwuu/hello_daft add .gitignore .gitattributes .claude/settings.local.json CLAUDE.md DESIGN.md README.md requirements.txt demo1_daft_basics/README.md demo1_daft_basics/data/generate_data.py demo1_daft_basics/src/__init__.py demo1_daft_basics/src/examples.py demo1_daft_basics/notebooks/01_introduction.ipynb demo1_daft_basics/notebooks/02_basic_operations.ipynb demo1_daft_basics/notebooks/03_data_processing.ipynb demo1_daft_basics/notebooks/04_advanced_features.ipynb demo2_ray_kubernetes/README.md demo3_lancedb_basics/README.md demo4_integrated_pipeline/README.md tests/__init__.py tests/unit/__init__.py tests/unit/test_demo1_examples.py)",
+      "Bash(git -C /home/hwuu/dev/github/hwuu/hello_daft add .gitignore .claude/settings.local.json CLAUDE.md DESIGN.md README.md requirements.txt demo1_daft_basics/README.md demo1_daft_basics/data/generate_data.py demo1_daft_basics/src/__init__.py demo1_daft_basics/src/examples.py demo1_daft_basics/notebooks/01_introduction.ipynb demo1_daft_basics/notebooks/02_basic_operations.ipynb demo1_daft_basics/notebooks/03_data_processing.ipynb demo1_daft_basics/notebooks/04_advanced_features.ipynb demo2_ray_kubernetes/README.md demo3_lancedb_basics/README.md demo4_integrated_pipeline/README.md tests/__init__.py tests/unit/__init__.py tests/unit/test_demo1_examples.py)"
+    ]
+  }
+}
