@@ -1,0 +1,82 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: ray-demo-cluster
+  namespace: ray-demo
+  labels:
+    app: ray-demo
+spec:
+  rayVersion: '2.53.0'
+  # Head 节点配置
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+    template:
+      metadata:
+        labels:
+          app: ray-demo
+          component: head
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.53.0
+          resources:
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+          ports:
+          - name: gcs
+            containerPort: 6379
+            protocol: TCP
+          - name: dashboard
+            containerPort: 8265
+            protocol: TCP
+          - name: client
+            containerPort: 10001
+            protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: dashboard
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: dashboard
+            initialDelaySeconds: 15
+            periodSeconds: 5
+  # Worker 节点配置
+  workerGroupSpecs:
+  - groupName: default-worker
+    replicas: 2
+    minReplicas: 1
+    maxReplicas: 4
+    rayStartParams: {}
+    template:
+      metadata:
+        labels:
+          app: ray-demo
+          component: worker
+      spec:
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.53.0
+          resources:
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+          livenessProbe:
+            exec:
+              command:
+              - bash
+              - -c
+              - "ray status"
+            initialDelaySeconds: 30
+            periodSeconds: 10

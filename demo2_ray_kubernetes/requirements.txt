@@ -1,0 +1,5 @@
+ray[default]
+getdaft>=0.7.2
+pyarrow
+pandas
+faker

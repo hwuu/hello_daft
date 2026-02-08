@@ -119,37 +119,34 @@ result = df_agg.collect()
 
 **学习目标**：
 - 理解 Ray 的分布式计算模型
-- 掌握 Ray 的基本 API（Tasks、Actors）
-- 学习在 Kubernetes 上部署 Ray 集群
-- 了解 Ray Dashboard 的使用
+- 掌握 Ray 的基本 API（Tasks、Actors、Object Store）
+- 学习 Daft + Ray 分布式数据处理
+- 了解在 Kubernetes 上部署 Ray 集群（可选/进阶）
 
 **内容大纲**：
-1. **Ray 基础**
-   - Ray 核心概念
-   - 本地 Ray 集群
-   - Tasks 和 Actors
-   - 远程函数调用
+1. **Ray 基础**（01_ray_basics.ipynb）
+   - Ray 核心概念（Tasks、Actors、Objects）
+   - 本地 Ray 集群初始化
+   - 串行 vs 并行对比、Task 依赖链
+   - Actor 有状态服务、Object Store 共享大对象
+   - 资源管理和错误处理
 
-2. **分布式计算示例**
-   - 并行数据处理
-   - 分布式训练示例
-   - 资源管理
-   - 错误处理和重试
+2. **Daft + Ray 分布式数据处理**（02_daft_on_ray.ipynb）
+   - Native Runner vs Ray Runner 架构
+   - 配置 Ray Runner、复用 Demo 1 产品数据
+   - 过滤/聚合/UDF 在 Ray 上执行
+   - Native vs Ray 性能对比（100 万条数据）
+   - 分区并行处理、Ray Dashboard 监控
 
-3. **Kubernetes 部署**
+3. **Kubernetes 部署**（03_kubernetes_deployment.ipynb，可选/进阶）
    - KubeRay Operator 安装
-   - Ray 集群配置
-   - 部署和扩缩容
-   - 监控和调试
+   - RayCluster CRD 配置详解
+   - 连接远程集群、Dashboard 监控
+   - 自动扩缩容、故障排除
 
-4. **实战练习**
-   - 分布式图像处理
-   - 并行数据转换
-   - 性能测试和优化
-
-**示例场景**：
-- 并行处理 10000 张图片（缩放、格式转换）
-- 分布式数据聚合计算
+**数据**：
+- 复用 Demo 1 产品数据集（`demo1_daft_basics/data/products.parquet`）
+- 性能测试时通过 `generate_data.py` 动态生成 100 万条数据
 
 **目录结构**：
 ```
@@ -158,37 +155,41 @@ demo2_ray_kubernetes/
 ├── requirements.txt
 ├── notebooks/
 │   ├── 01_ray_basics.ipynb
-│   ├── 02_distributed_computing.ipynb
+│   ├── 02_daft_on_ray.ipynb
 │   └── 03_kubernetes_deployment.ipynb
 ├── k8s/
 │   ├── namespace.yaml
-│   ├── ray-operator.yaml
-│   ├── ray-cluster.yaml
-│   └── README.md                # K8s 部署说明
-├── scripts/
-│   ├── setup_k8s.sh             # K8s 环境设置
-│   ├── deploy_ray.sh            # 部署 Ray 集群
-│   └── cleanup.sh               # 清理资源
-└── data/
-    └── sample_images/           # 示例图片
+│   └── ray-cluster.yaml
+└── scripts/
+    ├── setup_ray_k8s.sh         # 安装 KubeRay + 部署集群
+    └── cleanup.sh               # 清理资源
 ```
 
 **关键代码示例**：
 ```python
 import ray
+import daft
+from daft import col
 
-# 初始化 Ray
-ray.init(address="ray://ray-head:10001")
+# 初始化 Ray 并配置 Daft Ray Runner
+ray.init()
+daft.set_runner_ray()
 
-# 定义远程函数
-@ray.remote
-def process_data(data_chunk):
-    # 处理数据
-    return processed_data
+# 读取 Demo 1 产品数据（与 Native Runner 代码完全相同）
+df = daft.read_parquet("../../demo1_daft_basics/data/products.parquet")
 
-# 并行执行
-futures = [process_data.remote(chunk) for chunk in data_chunks]
-results = ray.get(futures)
+# 分布式数据处理
+result = (
+    df
+    .where(col("price") > 100)
+    .groupby("category")
+    .agg(
+        col("price").mean().alias("avg_price"),
+        col("product_id").count().alias("count"),
+    )
+    .sort("count", desc=True)
+    .collect()
+)
 ```
 
 **Kubernetes 配置示例**：
@@ -196,33 +197,33 @@ results = ray.get(futures)
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
-  name: ray-cluster
+  name: ray-demo-cluster
+  namespace: ray-demo
 spec:
-  rayVersion: '2.9.0'
+  rayVersion: '2.53.0'
   headGroupSpec:
-    replicas: 1
     template:
       spec:
         containers:
         - name: ray-head
-          image: rayproject/ray:2.9.0
+          image: rayproject/ray:2.53.0
           resources:
-            requests:
+            limits:
               cpu: "2"
               memory: "4Gi"
   workerGroupSpecs:
-  - replicas: 3
+  - replicas: 2
     minReplicas: 1
-    maxReplicas: 5
+    maxReplicas: 4
     template:
       spec:
         containers:
         - name: ray-worker
-          image: rayproject/ray:2.9.0
+          image: rayproject/ray:2.53.0
           resources:
-            requests:
-              cpu: "4"
-              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
 ```
 
 ---
@@ -587,7 +588,7 @@ hello_daft/
 
 ### 7.1 数据集规模
 - **Demo 1**: 100K 条产品记录（~50MB）
-- **Demo 2**: 10K 张图片（~500MB）
+- **Demo 2**: 复用 Demo 1 数据 + 动态生成 100 万条大数据集用于性能测试
 - **Demo 3**: 50K 条评论（~100MB）
 - **Demo 4**: 1M 条评论（~2GB）
 
@@ -738,7 +739,7 @@ python data/generate_data.py --size 100000 --output data/products.csv
 ### v1.0 (当前版本)
 - [x] 设计文档
 - [x] Demo 1: Daft 基础
-- [ ] Demo 2: Ray on Kubernetes
+- [x] Demo 2: Ray on Kubernetes
 - [ ] Demo 3: LanceDB 基础
 - [ ] Demo 4: 综合应用
 
@@ -757,6 +758,6 @@ python data/generate_data.py --size 100000 --output data/products.csv
 ---
 
 **文档版本**: 1.0
-**最后更新**: 2026-02-06
+**最后更新**: 2026-02-08
 **作者**: 系统设计
 **状态**: 待审核
