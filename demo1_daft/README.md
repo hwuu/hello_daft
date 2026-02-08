@@ -437,4 +437,4 @@ print(df.explain(show_all=True))
 
 **祝学习愉快！** 🚀
 
-如有问题，请查看 [故障排除指南](../docs/troubleshooting.md) 或提交 [Issue](https://github.com/your-username/hello_daft/issues)。
+如有问题，请提交 [Issue](https://github.com/hwuu/hello-daft/issues)。

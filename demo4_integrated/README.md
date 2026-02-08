@@ -573,10 +573,10 @@ df = daft.read_csv("data/raw/reviews_raw.csv").repartition(100)
 - 📊 **集成监控** - 使用 Prometheus + Grafana 监控系统
 - 🤖 **集成 MLOps** - 使用 MLflow 管理模型和实验
 
-更多进阶内容请参考 [设计文档](../DESIGN.md) 中的扩展和进阶章节。
+更多进阶内容请参考各 Demo 的 README。
 
 ---
 
 **祝学习愉快！** 🚀
 
-如有问题，请查看 [故障排除指南](../docs/troubleshooting.md) 或提交 [Issue](https://github.com/your-username/hello_daft/issues)。
+如有问题，请提交 [Issue](https://github.com/hwuu/hello-daft/issues)。
