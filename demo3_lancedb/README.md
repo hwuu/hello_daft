@@ -5,7 +5,8 @@ LanceDB 是一个嵌入式向量数据库，本教程通过中文商品评论数
 ## 前置要求
 
 - Python 环境（推荐 conda `hello_daft` 环境）
-- SiliconFlow API Key（用于嵌入生成，Notebook 02/03 需要）
+- SiliconFlow API Key（用于嵌入生成，Notebook 02/03/04 需要）
+- Demo 1 产品数据（Notebook 04 综合案例需要）
   ```bash
   export OPENAI_API_KEY='your-siliconflow-key'
   export OPENAI_BASE_URL='https://api.siliconflow.cn/v1'
@@ -31,3 +32,4 @@ jupyter notebook demo3_lancedb/notebooks/
 | 01 | [LanceDB 介绍与基础操作](notebooks/01_introduction.ipynb) | 向量数据库概念、LanceDB 连接与 CRUD 操作（无需 API Key） |
 | 02 | [嵌入与语义搜索](notebooks/02_embeddings_search.ipynb) | 使用 SiliconFlow API 生成嵌入，实现语义搜索与混合搜索 |
 | 03 | [Daft + LanceDB 集成](notebooks/03_daft_and_lancedb.ipynb) | 用 Daft 读写 Lance 格式、数据预处理与嵌入生成的完整 pipeline |
+| 04 | [综合案例：智能商品搜索](notebooks/04_smart_search.ipynb) | 整合 Demo 1-3 技术，构建端到端搜索系统（数据湖、嵌入、推荐） |
