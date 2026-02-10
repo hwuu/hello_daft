@@ -12,8 +12,8 @@
   - [2.3 可定制性设计](#23-可定制性设计)
 - [3. Data Platform](#3-data-platform)
   - [3.1 组件职责](#31-组件职责)
-  - [3.2 数据湖目录结构](#32-数据湖目录结构)
-  - [3.3 对外接口](#33-对外接口)
+  - [3.2 RESTful API](#32-restful-api)
+  - [3.3 数据湖目录结构](#33-数据湖目录结构)
 - [4. AI Platform](#4-ai-platform)
   - [4.1 模块职责](#41-模块职责)
   - [4.2 RESTful API](#42-restful-api)
@@ -82,17 +82,16 @@
 +-------------------------------------------------------------------+
 |                       Data Platform                               |
 |  +------------------+  +---------------------+  +---------------+ |
-|  | Daft             |  | Ray                 |  | LanceDB/Lance | |
-|  | (Compute Engine) |  | (Optional Runtime)  |  | (Storage)     | |
+|  | Daft             |  | Ray                 |  | Lance +       | |
+|  | (Compute Engine) |  | (Optional Runtime)  |  | LanceDB       | |
+|  |                  |  |                     |  | (Storage)     | |
 |  +------------------+  +---------------------+  +---------------+ |
 +-------------------------------------------------------------------+
 ```
 
 用户通过 AI Platform 的 RESTful API 操作全部功能，不直接接触 Data Platform。
 
-任务（Ingestion Task、Training Task）是高度可定制的：
-- **Ingestion Task** 通过可插拔的 pipeline 定义清洗逻辑，不同数据集使用不同的 pipeline
-- **Training Task** 通过指定训练脚本路径来定制训练逻辑，平台不限定模型架构和训练框架
+任务（Ingestion Task、Training Task）是高度可定制的——用户提供自己的脚本，平台只负责调度和存储（详见 [2.3 可定制性设计](#23-可定制性设计)）。
 
 ### 2.2 部署级别
 
@@ -208,10 +207,10 @@ Ray 集群部署在 K8s 上，存储切换到共享对象存储。
 POST /api/v1/ingestion-tasks
 {
     "name": "mnist_ingestion",
-    "source_path": "/data/raw/mnist/",
+    "input": "/data/raw/mnist/",
     "script": "pipelines/mnist_clean.py",
     "params": {"normalize": true, "flatten": true},
-    "output_dataset": "mnist_clean"
+    "output": "mnist_clean"
 }
 ```
 
@@ -236,10 +235,10 @@ def run(input_path: str, output_path: str, params: dict) -> dict:
 POST /api/v1/training-tasks
 {
     "name": "mnist_cnn_v1",
-    "dataset": "mnist_clean",
+    "input": "mnist_clean",
     "script": "training/mnist_cnn.py",
-    "params": {"epochs": 10, "learning_rate": 0.001, "batch_size": 64},
-    "output_model": "mnist_cnn_v1"
+    "params": {"epochs": 10, "learning_rate": 0.001, "batch_size": 64, "device": "cpu"},
+    "output": "mnist_cnn_v1"
 }
 ```
 
@@ -247,10 +246,10 @@ POST /api/v1/training-tasks
 
 ```python
 # training/mnist_cnn.py
-def run(data_path: str, output_path: str, params: dict) -> dict:
+def run(input_path: str, output_path: str, params: dict) -> dict:
     """
     Args:
-        data_path: Lance 数据集路径
+        input_path: Lance 数据集路径
         output_path: 模型输出路径
         params: 用户定义的超参数
     Returns:
@@ -258,7 +257,7 @@ def run(data_path: str, output_path: str, params: dict) -> dict:
     """
 ```
 
-两种任务的接口完全一致：`run(input, output, params) → stats/metrics`。
+两种任务的接口完全一致：`run(input_path, output_path, params) → stats/metrics`。
 
 ## 3. Data Platform
 
@@ -268,16 +267,129 @@ def run(data_path: str, output_path: str, params: dict) -> dict:
 
 | 组件 | 职责 |
 |------|------|
-| **LanceDB / Lance** | 数据湖存储：原始数据、清洗数据、特征、模型文件、向量索引 |
-| **Daft** | 计算引擎：数据读取、清洗、转换、嵌入生成 |
-| **Ray** | 分布式运行时：Daft 的执行后端，也可直接用于训练任务 |
+| **Lance** | 列式存储**格式**（类似 Parquet），针对 ML 优化：高压缩、支持大 BLOB、零拷贝 schema 演进 |
+| **LanceDB** | 基于 Lance 格式的**数据库引擎**，提供建表、查询、向量搜索等管理 API |
+| **Daft** | 计算引擎：可通过 `read_lance()` 直接读写 Lance 文件，也可通过 LanceDB API 操作 |
+| **Ray** | 分布式运行时：Daft 的可选执行后端，也可直接用于训练任务 |
+
+Lance 和 LanceDB 的关系类似 Parquet 和 DuckDB：
+
+```python
+# LanceDB — 数据库 API（建表、搜索）
+db = lancedb.connect("./lance_storage")
+db.create_table("products", data)
+db.open_table("products").search(query_vec)
+
+# Lance — Daft 直接读底层文件（绕过 LanceDB，用于大规模计算）
+daft.read_lance("./lance_storage/products.lance")
+```
 
 Data Platform 不关心业务逻辑，只提供：
 - 读写 Lance 格式数据
 - 执行 Daft DataFrame 计算
 - 分配 Ray 计算资源
 
-### 3.2 数据湖目录结构
+### 3.2 RESTful API
+
+Data Platform 作为独立微服务，通过 HTTP API 对外提供能力。数据本身不走 HTTP，而是通过共享存储（Lance 文件）交换：
+
+```
+AI Platform                          Data Platform
+     |                                    |
+     |  POST /tasks                       |
+     |  {"script": "clean.py",            |
+     |   "input": "s3://.../raw",         |
+     |   "output": "s3://.../clean"}      |
+     +----------------------------------->|
+     |                                    |  Execute script (Daft on Ray)
+     |  200 {"task_id": "..."}            |  Read Lance -> Process -> Write Lance
+     |<-----------------------------------+
+     |                                    |
+     |  Both sides read Lance files       |
+     |  directly (shared storage,         |
+     |  not through HTTP)                 |
+```
+
+#### 资源模型
+
+```
+/api/v1/
+├── datasets/                    # 数据集管理
+│   ├── GET    /                 # 列出数据湖中的数据集
+│   ├── GET    /{id}             # 查看数据集详情和 schema
+│   └── DELETE /{id}             # 删除数据集
+│
+├── models/                      # 模型管理
+│   ├── GET    /                 # 列出数据湖中的模型
+│   ├── GET    /{id}             # 查看模型详情（权重、指标、超参数）
+│   └── DELETE /{id}             # 删除模型
+│
+└── tasks/                       # 计算任务
+    ├── POST   /                 # 提交计算任务（执行用户脚本）
+    ├── GET    /{id}             # 查询任务状态
+    └── POST   /{id}/cancel      # 取消任务
+```
+
+#### 示例
+
+**提交计算任务：**
+
+```
+POST /api/v1/tasks
+{
+    "script": "pipelines/mnist_clean.py",
+    "input": "/data/raw/mnist/",
+    "output": "lance_storage/datasets/mnist_clean.lance",
+    "params": {"normalize": true, "flatten": true}
+}
+```
+
+```
+201 Created
+{
+    "id": "task-001",
+    "status": "running",
+    "created_at": "2026-02-10T10:00:00Z"
+}
+```
+
+**查询任务状态：**
+
+```
+GET /api/v1/tasks/task-001
+```
+
+```
+200 OK
+{
+    "id": "task-001",
+    "status": "completed",
+    "created_at": "2026-02-10T10:00:00Z",
+    "completed_at": "2026-02-10T10:01:30Z",
+    "result": {"total_records": 70000}
+}
+```
+
+**列出数据集：**
+
+```
+GET /api/v1/datasets
+```
+
+```
+200 OK
+[
+    {
+        "id": "mnist_clean",
+        "path": "lance_storage/datasets/mnist_clean.lance",
+        "schema": {"image": "binary", "label": "int64", "split": "string"},
+        "num_rows": 70000,
+        "size_bytes": 52428800
+    }
+]
+```
+
+### 3.3 数据湖目录结构
 
 LanceDB 作为统一存储层，所有数据（原始数据、清洗数据、模型权重、任务记录）都存在数据湖中：
 
@@ -287,48 +399,9 @@ lance_storage/
 │   ├── mnist_raw.lance          # Raw data (images + labels)
 │   ├── mnist_clean.lance        # Cleaned data
 │   └── mnist_features.lance     # Feature data (optional)
-├── models/
-│   ├── mnist_cnn_v1.lance       # Model weights + metadata
-│   └── mnist_cnn_v2.lance       # Model versioning
-└── metadata/
-    ├── tasks.lance              # Task execution records
-    └── metrics.lance            # Training metrics
-```
-
-### 3.3 对外接口
-
-Data Platform 作为独立微服务，通过 HTTP API 对外提供能力。数据本身不走 HTTP，而是通过共享存储（Lance 文件）交换：
-
-```
-AI Platform                     Data Platform
-     |                               |
-     |  POST /compute/submit         |
-     |  {"script": "clean.py",       |
-     |   "input": "s3://.../raw",    |
-     |   "output": "s3://.../clean"} |
-     +------------------------------>|
-     |                               |  Daft on Ray 执行
-     |  200 {"task_id": "..."}       |  读 Lance → 处理 → 写 Lance
-     |<------------------------------+
-     |                               |
-     |  两边都能直接读 Lance 文件     |
-     |  (共享存储，不经过 HTTP)       |
-```
-
-#### 存储 API
-
-```
-GET    /api/v1/storage/datasets              # 列出数据湖中的数据集
-GET    /api/v1/storage/datasets/{id}         # 查看数据集详情和 schema
-DELETE /api/v1/storage/datasets/{id}         # 删除数据集
-```
-
-#### 计算 API
-
-```
-POST   /api/v1/compute/submit               # 提交计算任务（执行用户脚本）
-GET    /api/v1/compute/{id}                  # 查询任务状态
-POST   /api/v1/compute/{id}/cancel           # 取消任务
+└── models/
+    ├── mnist_cnn_v1.lance       # Model weights + metadata
+    └── mnist_cnn_v2.lance       # Model versioning
 ```
 
 ## 4. AI Platform
@@ -349,22 +422,21 @@ POST   /api/v1/compute/{id}/cancel           # 取消任务
 
 ```
 /api/v1/
-├── datasets/                    # 数据集管理
+├── datasets/                    # 数据集管理（代理 Data Platform）
 │   ├── GET    /                 # 列出所有数据集
-│   ├── POST   /                 # 创建数据集（元数据）
 │   ├── GET    /{id}             # 获取数据集详情
 │   └── DELETE /{id}             # 删除数据集
+│
+├── models/                      # 模型管理（代理 Data Platform）
+│   ├── GET    /                 # 列出所有模型
+│   ├── GET    /{id}             # 获取模型详情（含指标）
+│   └── DELETE /{id}             # 删除模型
 │
 ├── ingestion-tasks/             # 数据入库任务
 │   ├── GET    /                 # 列出所有任务
 │   ├── POST   /                 # 创建并提交任务
 │   ├── GET    /{id}             # 获取任务状态和详情
 │   └── POST   /{id}/cancel      # 取消运行中的任务
-│
-├── models/                      # 模型管理
-│   ├── GET    /                 # 列出所有模型
-│   ├── GET    /{id}             # 获取模型详情（含指标）
-│   └── DELETE /{id}             # 删除模型
 │
 ├── training-tasks/              # 训练任务
 │   ├── GET    /                 # 列出所有任务
@@ -380,6 +452,8 @@ POST   /api/v1/compute/{id}/cancel           # 取消任务
     └── POST   /{id}/predict     # 调用推理
 ```
 
+> **注意**：`ingestion-tasks` 和 `training-tasks` 共享统一的请求格式（`name`/`input`/`script`/`params`/`output`），因为它们都是批处理任务。`inference-services` 的请求格式不同（`name`/`model`/`device`/`port`），因为它是常驻服务而非一次性任务。
+
 #### 用户使用流程（MNIST 示例）
 
 **Step 1: 创建数据入库任务**
@@ -388,10 +462,10 @@ POST   /api/v1/compute/{id}/cancel           # 取消任务
 POST /api/v1/ingestion-tasks
 {
     "name": "mnist_ingestion",
-    "source_path": "/data/raw/mnist/",
+    "input": "/data/raw/mnist/",
     "script": "pipelines/mnist_clean.py",
     "params": {"normalize": true, "flatten": true},
-    "output_dataset": "mnist_clean"
+    "output": "mnist_clean"
 }
 ```
 
@@ -402,7 +476,7 @@ POST /api/v1/ingestion-tasks
     "name": "mnist_ingestion",
     "status": "running",
     "created_at": "2026-02-10T10:00:00Z",
-    "output_dataset": "mnist_clean"
+    "output": "mnist_clean"
 }
 ```
 
@@ -420,7 +494,7 @@ GET /api/v1/ingestion-tasks/ingest-001
     "status": "completed",
     "created_at": "2026-02-10T10:00:00Z",
     "completed_at": "2026-02-10T10:01:30Z",
-    "output_dataset": "mnist_clean",
+    "output": "mnist_clean",
     "stats": {
         "total_records": 70000,
         "train_records": 60000,
@@ -440,7 +514,6 @@ GET /api/v1/datasets/mnist_clean
 {
     "id": "mnist_clean",
     "created_at": "2026-02-10T10:01:30Z",
-    "source_task": "ingest-001",
     "storage_path": "lance_storage/datasets/mnist_clean.lance",
     "schema": {
         "image": "binary",
@@ -460,15 +533,15 @@ GET /api/v1/datasets/mnist_clean
 POST /api/v1/training-tasks
 {
     "name": "mnist_cnn_v1",
-    "dataset": "mnist_clean",
+    "input": "mnist_clean",
     "script": "training/mnist_cnn.py",
     "params": {
         "epochs": 10,
         "learning_rate": 0.001,
-        "batch_size": 64
+        "batch_size": 64,
+        "device": "cpu"
     },
-    "device": "cpu",
-    "output_model": "mnist_cnn_v1"
+    "output": "mnist_cnn_v1"
 }
 ```
 
@@ -496,7 +569,7 @@ GET /api/v1/training-tasks/train-001
     "status": "completed",
     "created_at": "2026-02-10T10:05:00Z",
     "completed_at": "2026-02-10T10:12:00Z",
-    "output_model": "mnist_cnn_v1",
+    "output": "mnist_cnn_v1",
     "metrics": {
         "train_loss": 0.032,
         "test_accuracy": 0.987
@@ -593,23 +666,11 @@ Content-Type: application/json
 
 ### 5.1 交互方式
 
-```
-AI Platform                     Data Platform
-     |                               |
-     |  POST /compute/submit         |
-     |  {"script": "clean.py",       |
-     |   "input": "s3://.../raw",    |
-     |   "output": "s3://.../clean"} |
-     +------------------------------>|  执行用户脚本（Daft on Ray）
-     |                               |
-     |  GET /compute/{id}            |
-     |<------------------------------+  {"status": "completed"}
-     |                               |
-     |  两边都能直接读 Lance 文件     |
-     |  (共享存储，不经过 HTTP)       |
-```
+两个平台通过 Data Platform 的 HTTP API 交互（见 [3.2 RESTful API](#32-restful-api)）。核心原则：
 
-AI Platform 只看到 Lance 文件路径，不关心底层是本地磁盘还是 S3。
+- **HTTP 只传元数据**：任务定义、状态查询、脚本路径等
+- **数据走共享存储**：Lance 文件在共享存储（本地磁盘 / S3 / MinIO）上，两边直接读写，不经过 HTTP
+- **AI Platform 只看到路径**：不关心底层是本地磁盘还是 S3
 
 ### 5.2 各平台的边界
 
@@ -617,15 +678,15 @@ AI Platform 只看到 Lance 文件路径，不关心底层是本地磁盘还是 
 
 | AI Platform 看到的 | Data Platform 内部实现 |
 |---|---|
-| `POST /compute/submit` | Daft on Ray 执行用户脚本 |
-| `GET /storage/datasets` | 扫描 Lance 文件目录 |
+| `POST /tasks` | Daft on Ray 执行用户脚本 |
+| `GET /datasets` | 扫描 Lance 文件目录 |
 | Lance 文件路径（共享存储） | 本地 / S3 / MinIO |
 
 **Data Platform 不关心 AI 业务逻辑：**
 
 | Data Platform 提供的 | AI Platform 自行处理的 |
 |---|---|
-| 数据读写 | 清洗 pipeline 定义 |
+| 数据读写 | 清洗脚本和训练脚本 |
 | 分布式计算资源 | 训练代码和超参数 |
 | 存储管理 | 模型版本管理策略 |
 | 向量索引和搜索 | 推理服务和 API 设计 |
@@ -642,7 +703,7 @@ AI Platform 只看到 Lance 文件路径，不关心底层是本地磁盘还是 
 
 ```
 +-------------+     +------------------+     +------------------+
-| Raw Data    |     | User Script      |     | LanceDB          |
+| Raw Data    |     | User Script      |     | Data Lake        |
 | (MNIST zip) | --> | (on Daft/Ray)    | --> | (lance_storage/  |
 |             |     |                  |     |  datasets/)      |
 +-------------+     +------------------+     +------------------+
@@ -686,7 +747,7 @@ MNIST 的具体清洗步骤：
 
 ```
 +------------------+     +------------------+     +------------------+
-| LanceDB          |     | User Script      |     | LanceDB          |
+| Data Lake        |     | User Script      |     | Data Lake        |
 | (datasets/)      | --> | (PyTorch on CPU) | --> | (models/)        |
 +------------------+     +------------------+     +------------------+
 ```
@@ -695,12 +756,12 @@ AI Platform 提交任务，Data Platform 执行用户脚本：
 
 ```python
 # training/mnist_cnn.py — 用户编写
-def run(data_path: str, output_path: str, params: dict) -> dict:
+def run(input_path: str, output_path: str, params: dict) -> dict:
     import daft
     from daft import col
 
     # 从数据湖读取训练数据
-    df = daft.read_lance(data_path)
+    df = daft.read_lance(input_path)
     train_data = df.where(col("split") == "train").to_pandas()
     test_data = df.where(col("split") == "test").to_pandas()
 
@@ -719,7 +780,7 @@ def run(data_path: str, output_path: str, params: dict) -> dict:
 
 ```
 +------------------+     +------------------+     +------------------+
-| LanceDB          |     | Model Loading    |     | API / Web        |
+| Data Lake        |     | Model Loading    |     | API / Web        |
 | (models/)        | --> | (PyTorch)        | --> | (FastAPI)        |
 +------------------+     +------------------+     +------------------+
 ```
