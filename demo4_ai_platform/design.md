@@ -10,18 +10,18 @@
   - [2.1 核心分层](#21-核心分层)
   - [2.2 部署级别](#22-部署级别)
   - [2.3 可定制性设计](#23-可定制性设计)
-- [3. Data Platform](#3-data-platform)
+- [3. Executor](#3-executor)
   - [3.1 组件职责](#31-组件职责)
   - [3.2 RESTful API](#32-restful-api)
   - [3.3 数据湖目录结构](#33-数据湖目录结构)
-- [4. AI Platform](#4-ai-platform)
+- [4. Orchestrator](#4-orchestrator)
   - [4.1 模块职责](#41-模块职责)
   - [4.2 RESTful API](#42-restful-api)
   - [4.3 任务状态机](#43-任务状态机)
   - [4.4 错误处理](#44-错误处理)
 - [5. 解耦设计](#5-解耦设计)
   - [5.1 交互方式](#51-交互方式)
-  - [5.2 各平台的边界](#52-各平台的边界)
+  - [5.2 边界划分](#52-边界划分)
   - [5.3 可替换性](#53-可替换性)
 - [6. 核心任务流](#6-核心任务流)
   - [6.1 数据入库](#61-数据入库)
@@ -31,7 +31,7 @@
   - [7.1 目录结构](#71-目录结构)
   - [7.2 实现步骤](#72-实现步骤)
   - [7.3 技术选型](#73-技术选型)
-  - [7.4 火山引擎理念在 MNIST 中的体现](#74-火山引擎理念在-mnist-中的体现)
+  - [7.4 配置](#74-配置)
 - [参考文献](#参考文献)
 
 ## 1. 背景与目标
@@ -56,10 +56,10 @@
 
 ### 1.3 设计目标
 
-将系统拆分为两个解耦的平台：
+将系统拆分为两个解耦的服务，统称 **AI Platform**：
 
-- **Data Platform**（数据平台）：基于 Daft + Ray + LanceDB，提供存储和计算原语
-- **AI Platform**（AI 平台）：基于 Data Platform，提供 RESTful API 管理数据入库、模型训练、推理服务
+- **Executor**（执行器）：基于 Daft + Ray + LanceDB，负责数据湖存储和脚本执行
+- **Orchestrator**（编排器）：负责任务编排、代理查询、推理服务，是用户唯一入口
 
 两者通过 **Lance 格式**作为契约层连接，互不依赖对方的实现细节。
 
@@ -68,30 +68,32 @@
 ### 2.1 核心分层
 
 ```
-+-------------------------------------------------------------------+
++------------------------------------------------------------------+
 |                        AI Platform                                |
-|  (RESTful API: FastAPI)                                           |
-|  +------------------+  +------------------+  +-----------------+  |
-|  | Ingestion Task   |  | Training Task    |  | Inference       |  |
-|  | Manager          |  | Manager          |  | Service         |  |
-|  +--------+---------+  +--------+---------+  +--------+--------+  |
-|           |                      |                     |          |
-+-----------+----------------------+---------------------+----------+
-            |                      |                     |
-            v                      v                     v
-+-------------------------------------------------------------------+
-|                       Data Platform                               |
-|  +------------------+  +---------------------+  +---------------+ |
-|  | Daft             |  | Ray                 |  | Lance +       | |
-|  | (Compute Engine) |  | (Optional Runtime)  |  | LanceDB       | |
-|  |                  |  |                     |  | (Storage)     | |
-|  +------------------+  +---------------------+  +---------------+ |
-+-------------------------------------------------------------------+
+|                                                                   |
+|  +------------------------------------------------------------+  |
+|  |  Orchestrator (RESTful API: FastAPI)                        |  |
+|  |  +------------------------------------------------------+  |  |
+|  |  | Task Manager (ingestion / training / inference)       |  |  |
+|  |  +---------------------------+--------------------------+  |  |
+|  |                              |                             |  |
+|  +------------------------------+-----------------------------+  |
+|                                 |                                 |
+|                                 v                                 |
+|  +------------------------------------------------------------+  |
+|  |  Executor (RESTful API: FastAPI)                            |  |
+|  |  +----------------+  +-------------------+  +------------+ |  |
+|  |  | Daft           |  | Ray               |  | Lance +    | |  |
+|  |  | (Compute)      |  | (Optional Runtime)|  | LanceDB   | |  |
+|  |  |                |  |                   |  | (Storage)  | |  |
+|  |  +----------------+  +-------------------+  +------------+ |  |
+|  +------------------------------------------------------------+  |
++------------------------------------------------------------------+
 ```
 
-用户通过 AI Platform 的 RESTful API 操作全部功能，不直接接触 Data Platform。
+用户通过 Orchestrator 的 RESTful API 操作全部功能，不直接接触 Executor。
 
-任务（Ingestion Task、Training Task）是高度可定制的——用户提供自己的脚本，平台只负责调度和存储（详见 [2.3 可定制性设计](#23-可定制性设计)）。
+任务（ingestion、training、inference）是高度可定制的——用户提供自己的脚本，平台只负责调度和存储（详见 [2.3 可定制性设计](#23-可定制性设计)）。
 
 ### 2.2 部署级别
 
@@ -201,11 +203,12 @@ Ray 集群部署在 K8s 上，存储切换到共享对象存储。
 
 平台不绑定特定数据集或模型。Ingestion 和 Training 采用统一的**脚本模式**：平台负责调度和存储，用户脚本负责业务逻辑。
 
-**Ingestion Task — 用户提供清洗脚本：**
+**type=ingestion — 用户提供清洗脚本：**
 
 ```
-POST /api/v1/ingestion-tasks
+POST /api/v1/tasks
 {
+    "type": "ingestion",
     "name": "mnist_ingestion",
     "input": "/data/raw/mnist/",
     "script": "pipelines/mnist_clean.py",
@@ -229,11 +232,12 @@ def run(input_path: str, output_path: str, params: dict) -> dict:
     """
 ```
 
-**Training Task — 用户提供训练脚本：**
+**type=training — 用户提供训练脚本：**
 
 ```
-POST /api/v1/training-tasks
+POST /api/v1/tasks
 {
+    "type": "training",
     "name": "mnist_cnn_v1",
     "input": "mnist_clean",
     "script": "training/mnist_cnn.py",
@@ -259,9 +263,9 @@ def run(input_path: str, output_path: str, params: dict) -> dict:
 
 两种任务的接口完全一致：`run(input_path, output_path, params) → stats/metrics`。
 
-## 3. Data Platform
+## 3. Executor
 
-底层基础设施，提供存储和计算原语。
+数据湖存储 + 脚本执行器。
 
 ### 3.1 组件职责
 
@@ -284,24 +288,24 @@ db.open_table("products").search(query_vec)
 daft.read_lance("./lance_storage/products.lance")
 ```
 
-Data Platform 不关心业务逻辑，只提供：
+Executor 不关心业务逻辑，只提供：
 - 读写 Lance 格式数据
 - 执行 Daft DataFrame 计算
 - 分配 Ray 计算资源
 
 ### 3.2 RESTful API
 
-Data Platform 作为独立微服务，通过 HTTP API 对外提供能力。数据本身不走 HTTP，而是通过共享存储（Lance 文件）交换：
+Executor 作为独立微服务，通过 HTTP API 对外提供能力。数据本身不走 HTTP，而是通过共享存储（Lance 文件）交换：
 
 ```
-AI Platform                          Data Platform
+Orchestrator                         Executor
      |                                    |
      |  POST /tasks                       |
      |  {"script": "clean.py",            |
      |   "input": "s3://.../raw",         |
      |   "output": "s3://.../clean"}      |
      +----------------------------------->|
-     |                                    |  Execute script (Daft on Ray)
+     |  Execute script (Daft on Ray)
      |  200 {"task_id": "..."}            |  Read Lance -> Process -> Write Lance
      |<-----------------------------------+
      |                                    |
@@ -391,7 +395,7 @@ GET /api/v1/datasets
 
 ### 3.3 数据湖目录结构
 
-LanceDB 作为统一存储层，所有数据（原始数据、清洗数据、模型权重、任务记录）都存在数据湖中：
+Lance 作为统一存储格式，数据集和模型都存在数据湖中：
 
 ```
 lance_storage/
@@ -404,17 +408,16 @@ lance_storage/
     └── mnist_cnn_v2.lance       # Model versioning
 ```
 
-## 4. AI Platform
+## 4. Orchestrator
 
-上层业务编排，通过 RESTful API 管理 AI 工作流。
+任务编排、代理查询、推理服务。用户唯一入口。
 
 ### 4.1 模块职责
 
 | 模块 | 职责 |
 |------|------|
-| **Ingestion Task Manager** | 定义和执行数据入库任务（数据源 → 用户脚本 → 数据湖） |
-| **Training Task Manager** | 定义和执行训练任务（数据湖 → 用户脚本 → 模型 → 数据湖） |
-| **Inference Service** | 加载模型，提供推理 API |
+| **Task Manager** | 统一管理所有任务（ingestion / training / inference），调用 Executor API |
+| **Proxy** | 代理 Executor 的 datasets / models 查询 |
 
 ### 4.2 RESTful API
 
@@ -422,45 +425,40 @@ lance_storage/
 
 ```
 /api/v1/
-├── datasets/                    # 数据集管理（代理 Data Platform）
+├── datasets/                    # 数据集管理（代理 Executor）
 │   ├── GET    /                 # 列出所有数据集
 │   ├── GET    /{id}             # 获取数据集详情
 │   └── DELETE /{id}             # 删除数据集
 │
-├── models/                      # 模型管理（代理 Data Platform）
+├── models/                      # 模型管理（代理 Executor）
 │   ├── GET    /                 # 列出所有模型
 │   ├── GET    /{id}             # 获取模型详情（含指标）
 │   └── DELETE /{id}             # 删除模型
 │
-├── ingestion-tasks/             # 数据入库任务
-│   ├── GET    /                 # 列出所有任务
-│   ├── POST   /                 # 创建并提交任务
-│   ├── GET    /{id}             # 获取任务状态和详情
-│   └── POST   /{id}/cancel      # 取消运行中的任务
-│
-├── training-tasks/              # 训练任务
-│   ├── GET    /                 # 列出所有任务
-│   ├── POST   /                 # 创建并提交任务
-│   ├── GET    /{id}             # 获取任务状态和详情
-│   └── POST   /{id}/cancel      # 取消运行中的任务
-│
-└── inference-services/          # 推理服务
-    ├── GET    /                 # 列出所有服务
-    ├── POST   /                 # 创建并启动服务
-    ├── GET    /{id}             # 获取服务状态
-    ├── DELETE /{id}             # 停止并删除服务
-    └── POST   /{id}/predict     # 调用推理
+└── tasks/                       # 统一任务管理
+    ├── GET    /                 # 列出所有任务（可按 ?type=ingestion 过滤）
+    ├── POST   /                 # 创建任务（type 区分 ingestion/training/inference）
+    ├── GET    /{id}             # 获取任务状态和详情
+    ├── POST   /{id}/cancel      # 取消/停止任务
+    └── POST   /{id}/predict     # 调用推理（仅 type=inference）
 ```
 
-> **注意**：`ingestion-tasks` 和 `training-tasks` 共享统一的请求格式（`name`/`input`/`script`/`params`/`output`），因为它们都是批处理任务。`inference-services` 的请求格式不同（`name`/`model`/`device`/`port`），因为它是常驻服务而非一次性任务。
+三种任务类型：
+
+| type | 行为 | 请求字段 |
+|------|------|---------|
+| `ingestion` | 批处理：运行完自动 completed | `name`, `input`, `script`, `params`, `output` |
+| `training` | 批处理：运行完自动 completed | `name`, `input`, `script`, `params`, `output` |
+| `inference` | 常驻服务：一直 running 直到 cancel | `name`, `model`, `device`, `port` |
 
 #### 用户使用流程（MNIST 示例）
 
 **Step 1: 创建数据入库任务**
 
 ```
-POST /api/v1/ingestion-tasks
+POST /api/v1/tasks
 {
+    "type": "ingestion",
     "name": "mnist_ingestion",
     "input": "/data/raw/mnist/",
     "script": "pipelines/mnist_clean.py",
@@ -472,30 +470,30 @@ POST /api/v1/ingestion-tasks
 ```
 201 Created
 {
-    "id": "ingest-001",
+    "id": "task-001",
+    "type": "ingestion",
     "name": "mnist_ingestion",
     "status": "running",
-    "created_at": "2026-02-10T10:00:00Z",
-    "output": "mnist_clean"
+    "created_at": "2026-02-10T10:00:00Z"
 }
 ```
 
 **Step 2: 查看任务状态**
 
 ```
-GET /api/v1/ingestion-tasks/ingest-001
+GET /api/v1/tasks/task-001
 ```
 
 ```
 200 OK
 {
-    "id": "ingest-001",
+    "id": "task-001",
+    "type": "ingestion",
     "name": "mnist_ingestion",
     "status": "completed",
     "created_at": "2026-02-10T10:00:00Z",
     "completed_at": "2026-02-10T10:01:30Z",
-    "output": "mnist_clean",
-    "stats": {
+    "result": {
         "total_records": 70000,
         "train_records": 60000,
         "test_records": 10000
@@ -530,8 +528,9 @@ GET /api/v1/datasets/mnist_clean
 **Step 4: 创建训练任务**
 
 ```
-POST /api/v1/training-tasks
+POST /api/v1/tasks
 {
+    "type": "training",
     "name": "mnist_cnn_v1",
     "input": "mnist_clean",
     "script": "training/mnist_cnn.py",
@@ -548,7 +547,8 @@ POST /api/v1/training-tasks
 ```
 201 Created
 {
-    "id": "train-001",
+    "id": "task-002",
+    "type": "training",
     "name": "mnist_cnn_v1",
     "status": "running",
     "created_at": "2026-02-10T10:05:00Z"
@@ -558,19 +558,19 @@ POST /api/v1/training-tasks
 **Step 5: 查看训练进度**
 
 ```
-GET /api/v1/training-tasks/train-001
+GET /api/v1/tasks/task-002
 ```
 
 ```
 200 OK
 {
-    "id": "train-001",
+    "id": "task-002",
+    "type": "training",
     "name": "mnist_cnn_v1",
     "status": "completed",
     "created_at": "2026-02-10T10:05:00Z",
     "completed_at": "2026-02-10T10:12:00Z",
-    "output": "mnist_cnn_v1",
-    "metrics": {
+    "result": {
         "train_loss": 0.032,
         "test_accuracy": 0.987
     }
@@ -580,8 +580,9 @@ GET /api/v1/training-tasks/train-001
 **Step 6: 启动推理服务**
 
 ```
-POST /api/v1/inference-services
+POST /api/v1/tasks
 {
+    "type": "inference",
     "name": "mnist_predictor",
     "model": "mnist_cnn_v1",
     "device": "cpu",
@@ -592,7 +593,8 @@ POST /api/v1/inference-services
 ```
 201 Created
 {
-    "id": "serve-001",
+    "id": "task-003",
+    "type": "inference",
     "name": "mnist_predictor",
     "status": "running",
     "endpoint": "http://localhost:8080",
@@ -603,7 +605,7 @@ POST /api/v1/inference-services
 **Step 7: 调用推理**
 
 ```
-POST /api/v1/inference-services/serve-001/predict
+POST /api/v1/tasks/task-003/predict
 Content-Type: application/json
 {
     "image": "<base64 encoded image>"
@@ -621,7 +623,7 @@ Content-Type: application/json
 
 ### 4.3 任务状态机
 
-所有异步任务（ingestion-tasks、training-tasks）共享同一状态机：
+所有任务共享同一状态机。批处理任务（ingestion/training）运行完自动进入 completed；常驻任务（inference）保持 running 直到 cancel：
 
 ```
 +----------+     submit    +-----------+     done      +-----------+
@@ -662,29 +664,29 @@ Content-Type: application/json
 
 ## 5. 解耦设计
 
-两个平台通过 **Lance 格式**解耦，Lance 是唯一的数据交换格式。
+两个服务通过 **Lance 格式**解耦，Lance 是唯一的数据交换格式。
 
 ### 5.1 交互方式
 
-两个平台通过 Data Platform 的 HTTP API 交互（见 [3.2 RESTful API](#32-restful-api)）。核心原则：
+Orchestrator 通过 Executor 的 HTTP API 交互（见 [3.2 RESTful API](#32-restful-api)）。核心原则：
 
 - **HTTP 只传元数据**：任务定义、状态查询、脚本路径等
 - **数据走共享存储**：Lance 文件在共享存储（本地磁盘 / S3 / MinIO）上，两边直接读写，不经过 HTTP
-- **AI Platform 只看到路径**：不关心底层是本地磁盘还是 S3
+- **Orchestrator 只看到路径**：不关心底层是本地磁盘还是 S3
 
-### 5.2 各平台的边界
+### 5.2 边界划分
 
-**AI Platform 不依赖 Data Platform 的实现细节：**
+**Orchestrator 不依赖 Executor 的实现细节：**
 
-| AI Platform 看到的 | Data Platform 内部实现 |
+| Orchestrator 看到的 | Executor 内部实现 |
 |---|---|
 | `POST /tasks` | Daft on Ray 执行用户脚本 |
 | `GET /datasets` | 扫描 Lance 文件目录 |
 | Lance 文件路径（共享存储） | 本地 / S3 / MinIO |
 
-**Data Platform 不关心 AI 业务逻辑：**
+**Executor 不关心业务逻辑：**
 
-| Data Platform 提供的 | AI Platform 自行处理的 |
+| Executor 提供的 | Orchestrator 自行处理的 |
 |---|---|
 | 数据读写 | 清洗脚本和训练脚本 |
 | 分布式计算资源 | 训练代码和超参数 |
@@ -693,9 +695,9 @@ Content-Type: application/json
 
 ### 5.3 可替换性
 
-- **替换 Data Platform 存储**（如 Lance → Parquet + Milvus）：AI Platform 不受影响，Data Platform 内部改实现即可
-- **替换 Data Platform 计算**（如 Daft → Spark）：AI Platform 代码不变，只要 Data Platform API 不变
-- **替换 AI Platform 训练框架**（如 PyTorch → TensorFlow）：Data Platform 不受影响
+- **替换 Executor 存储**（如 Lance → Parquet + Milvus）：Orchestrator 不受影响，Executor 内部改实现即可
+- **替换 Executor 计算**（如 Daft → Spark）：Orchestrator 代码不变，只要 Executor API 不变
+- **替换训练框架**（如 PyTorch → TensorFlow）：Executor 不受影响
 
 ## 6. 核心任务流
 
@@ -709,7 +711,7 @@ Content-Type: application/json
 +-------------+     +------------------+     +------------------+
 ```
 
-AI Platform 提交任务，Data Platform 执行用户脚本：
+Orchestrator 提交任务，Executor 执行用户脚本：
 
 ```python
 # pipelines/mnist_clean.py — 用户编写
@@ -752,7 +754,7 @@ MNIST 的具体清洗步骤：
 +------------------+     +------------------+     +------------------+
 ```
 
-AI Platform 提交任务，Data Platform 执行用户脚本：
+Orchestrator 提交任务，Executor 执行用户脚本：
 
 ```python
 # training/mnist_cnn.py — 用户编写
@@ -819,20 +821,19 @@ demo4_ai_platform/
 ├── design.md                    # 本文档
 ├── README.md
 ├── requirements.txt
-├── lance_storage/               # 数据湖根目录（共享存储）
+├── config.yaml                  # 配置文件（Executor 地址、存储路径等）
+├── lance_storage/               # 数据湖根目录（共享存储，gitignored）
 │   ├── datasets/
 │   └── models/
-├── data_platform/               # 数据平台（独立微服务）
+├── executor/                    # Executor（独立微服务）
 │   ├── __init__.py
-│   ├── app.py                   # FastAPI 主应用（存储 + 计算 API）
+│   ├── app.py                   # FastAPI 主应用（存储 + 任务 API）
 │   ├── storage.py               # Lance 读写封装
-│   └── compute.py               # Daft + Ray 计算封装
-├── ai_platform/                 # AI 平台（独立微服务）
+│   └── runner.py                # 脚本执行器（加载脚本、调用 run()、管理 Daft/Ray）
+├── orchestrator/                # Orchestrator（独立微服务，用户入口）
 │   ├── __init__.py
 │   ├── app.py                   # FastAPI 主应用（任务 + 推理 API）
-│   ├── ingestion.py             # 数据入库任务管理
-│   ├── training.py              # 模型训练任务管理
-│   └── serving.py               # 推理服务管理
+│   └── tasks.py                 # 统一任务管理（ingestion/training/inference）
 ├── scripts/                     # 用户脚本（清洗 + 训练）
 │   ├── pipelines/
 │   │   └── mnist_clean.py       # MNIST 清洗脚本
@@ -842,18 +843,21 @@ demo4_ai_platform/
     └── unit/
 ```
 
+> `lance_storage/` 是运行时数据，应加入 `.gitignore`。
+
 ### 7.2 实现步骤
 
-1. `data_platform/storage.py` — Lance 读写封装（列出、查看 schema、删除）
-2. `data_platform/compute.py` — Daft 计算封装（执行用户脚本、管理 Ray runner）
-3. `data_platform/app.py` — Data Platform HTTP API（存储 + 计算路由）
+1. `executor/storage.py` — Lance 读写封装（列出、查看 schema、删除）
+2. `executor/runner.py` — 脚本执行器（加载用户脚本、调用 `run()`、管理 Daft/Ray runner）
+3. `executor/app.py` — Executor HTTP API（存储 + 任务路由）
 4. `scripts/pipelines/mnist_clean.py` — MNIST 清洗脚本（实现 `run()` 接口）
 5. `scripts/training/mnist_cnn.py` — PyTorch CNN 训练脚本（实现 `run()` 接口）
-6. `ai_platform/ingestion.py` — 数据入库任务管理（调用 Data Platform API）
-7. `ai_platform/training.py` — 训练任务管理（调用 Data Platform API）
-8. `ai_platform/serving.py` — 推理服务管理
-9. `ai_platform/app.py` — AI Platform HTTP API（任务 + 推理路由）
-10. 单元测试
+6. `orchestrator/tasks.py` — 统一任务管理（ingestion/training/inference，调用 Executor API）
+7. `orchestrator/app.py` — Orchestrator HTTP API（任务 + 代理路由）
+8. `config.yaml` — 配置文件
+9. 单元测试
+
+> Orchestrator 的 `tasks.py` 统一处理三种任务类型。ingestion 和 training 的调用逻辑完全相同（向 Executor 提交脚本任务），inference 额外管理模型加载和 predict 端点。
 
 ### 7.3 技术选型
 
@@ -866,12 +870,20 @@ demo4_ai_platform/
 | API 框架 | FastAPI | 异步支持好，自动生成 OpenAPI 文档 |
 | Web 界面 | Gradio（可选） | 快速搭建手写体识别 demo 页面 |
 
-### 7.4 火山引擎理念在 MNIST 中的体现
+### 7.4 配置
 
-- **Lance 列式存储**：图像数据以 Lance 格式存储，按需加载
-- **懒加载**：训练时只读取需要的列（image + label），不加载元数据
-- **零拷贝 Schema 演进**：模型表可以灵活添加 metrics 列，不需要重写
-- **统一存储**：数据集和模型都在同一个数据湖中，通过路径区分
+```yaml
+# config.yaml
+executor:
+  host: "http://localhost:8001"    # Executor 服务地址
+  storage_path: "./lance_storage"  # 数据湖根目录
+
+orchestrator:
+  host: "http://localhost:8000"    # Orchestrator 服务地址（用户入口）
+  task_state: "memory"             # 任务状态存储：memory（Level 1）/ ray（Level 2+）
+```
+
+Level 1 下 Orchestrator 的任务状态存储在内存中。Level 2+ 切换到 Ray 后，任务状态由 Ray Tasks/Workflows 管理。
 
 ## 参考文献
 
