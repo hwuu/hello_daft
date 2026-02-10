@@ -1,0 +1,7 @@
+executor:
+  host: "http://localhost:8001"
+  storage_path: "./lance_storage"
+
+orchestrator:
+  host: "http://localhost:8000"
+  task_state: "memory"  # memory (Level 1) / ray (Level 2+)
