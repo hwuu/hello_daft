@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MNIST 手写数字识别</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+        .container { max-width: 720px; width: 100%; }
+        h1 { font-size: 24px; margin-bottom: 8px; }
+        .subtitle { color: #666; margin-bottom: 24px; }
+
+        .main {
+            display: flex;
+            gap: 24px;
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        /* 画布区域 */
+        .canvas-area { flex-shrink: 0; }
+        canvas {
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            cursor: crosshair;
+            display: block;
+        }
+        .buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-predict {
+            background: #2563eb;
+            color: white;
+        }
+        .btn-predict:hover { background: #1d4ed8; }
+        .btn-predict:disabled { background: #93c5fd; cursor: not-allowed; }
+        .btn-clear {
+            background: #e5e7eb;
+            color: #374151;
+        }
+        .btn-clear:hover { background: #d1d5db; }
+
+        /* 结果区域 */
+        .result-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .prediction-display {
+            text-align: center;
+            padding: 20px 0;
+        }
+        .prediction-number {
+            font-size: 72px;
+            font-weight: bold;
+            color: #2563eb;
+            line-height: 1;
+        }
+        .confidence {
+            font-size: 14px;
+            color: #666;
+            margin-top: 4px;
+        }
+        .prob-chart { flex: 1; }
+        .prob-bar-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+        .prob-label {
+            width: 16px;
+            text-align: right;
+            margin-right: 8px;
+            color: #666;
+        }
+        .prob-bar-bg {
+            flex: 1;
+            height: 18px;
+            background: #f3f4f6;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .prob-bar {
+            height: 100%;
+            background: #93c5fd;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        .prob-bar.highlight { background: #2563eb; }
+        .prob-value {
+            width: 48px;
+            text-align: right;
+            margin-left: 8px;
+            color: #666;
+            font-size: 12px;
+        }
+
+        /* 状态 */
+        .status {
+            margin-top: 16px;
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            font-size: 13px;
+            color: #666;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        .status-dot.ok { background: #22c55e; }
+        .status-dot.err { background: #ef4444; }
+        .status-dot.loading { background: #f59e0b; }
+
+        .placeholder {
+            color: #aaa;
+            text-align: center;
+            padding: 40px 0;
+        }
+
+        /* 配置区 */
+        .config {
+            margin-top: 16px;
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            font-size: 13px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .config label { color: #666; }
+        .config input {
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            width: 200px;
+        }
+        .config select {
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MNIST 手写数字识别</h1>
+        <p class="subtitle">在画布上写一个数字（0-9），点击"识别"调用 AI Platform 推理 API</p>
+
+        <div class="main">
+            <div class="canvas-area">
+                <canvas id="canvas" width="280" height="280"></canvas>
+                <div class="buttons">
+                    <button class="btn-predict" id="predictBtn" onclick="predict()">识别</button>
+                    <button class="btn-clear" onclick="clearCanvas()">清除</button>
+                </div>
+            </div>
+
+            <div class="result-area">
+                <div class="prediction-display" id="predDisplay">
+                    <div class="placeholder">在左侧画布上写一个数字</div>
+                </div>
+                <div class="prob-chart" id="probChart"></div>
+            </div>
+        </div>
+
+        <div class="status" id="status">
+            <span class="status-dot loading" id="statusDot"></span>
+            <span id="statusText">正在连接服务...</span>
+        </div>
+
+        <div class="config">
+            <label>API 地址:</label>
+            <input id="apiUrl" value="http://localhost:8000/api/v1" onchange="checkService()">
+            <label>推理任务:</label>
+            <select id="taskSelect" onchange="selectTask()">
+                <option value="">加载中...</option>
+            </select>
+        </div>
+    </div>
+
+    <script>
+        // ========== 画布逻辑 ==========
+
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        let drawing = false;
+
+        // 黑底白字（与 MNIST 一致）
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, 280, 280);
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 16;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        canvas.addEventListener("mousedown", (e) => {
+            drawing = true;
+            ctx.beginPath();
+            ctx.moveTo(e.offsetX, e.offsetY);
+        });
+        canvas.addEventListener("mousemove", (e) => {
+            if (!drawing) return;
+            ctx.lineTo(e.offsetX, e.offsetY);
+            ctx.stroke();
+        });
+        canvas.addEventListener("mouseup", () => { drawing = false; });
+        canvas.addEventListener("mouseleave", () => { drawing = false; });
+
+        // 触屏支持
+        canvas.addEventListener("touchstart", (e) => {
+            e.preventDefault();
+            drawing = true;
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            ctx.beginPath();
+            ctx.moveTo(touch.clientX - rect.left, touch.clientY - rect.top);
+        });
+        canvas.addEventListener("touchmove", (e) => {
+            e.preventDefault();
+            if (!drawing) return;
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            ctx.lineTo(touch.clientX - rect.left, touch.clientY - rect.top);
+            ctx.stroke();
+        });
+        canvas.addEventListener("touchend", () => { drawing = false; });
+
+        function clearCanvas() {
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, 280, 280);
+            ctx.strokeStyle = "white";
+            document.getElementById("predDisplay").innerHTML =
+                '<div class="placeholder">在左侧画布上写一个数字</div>';
+            document.getElementById("probChart").innerHTML = "";
+        }
+
+        // ========== 图像处理 ==========
+
+        function getImageData() {
+            // 将 280x280 画布缩小到 28x28（MNIST 尺寸）
+            const small = document.createElement("canvas");
+            small.width = 28;
+            small.height = 28;
+            const sctx = small.getContext("2d");
+            sctx.drawImage(canvas, 0, 0, 28, 28);
+
+            // 提取灰度像素值，归一化到 [0, 1]
+            const imageData = sctx.getImageData(0, 0, 28, 28);
+            const pixels = [];
+            for (let i = 0; i < imageData.data.length; i += 4) {
+                // 取红色通道（灰度图 R=G=B），归一化
+                pixels.push(imageData.data[i] / 255.0);
+            }
+            return pixels;  // 784 维浮点数组
+        }
+
+        // ========== API 调用 ==========
+
+        let currentTaskId = null;
+
+        async function predict() {
+            if (!currentTaskId) {
+                alert("请先选择一个推理任务，或创建一个新的推理任务");
+                return;
+            }
+
+            const btn = document.getElementById("predictBtn");
+            btn.disabled = true;
+            btn.textContent = "识别中...";
+
+            try {
+                const image = getImageData();
+                const apiUrl = document.getElementById("apiUrl").value;
+                const resp = await fetch(`${apiUrl}/tasks/${currentTaskId}/predict`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ image }),
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.message || `HTTP ${resp.status}`);
+                }
+
+                const result = await resp.json();
+                showResult(result);
+            } catch (e) {
+                document.getElementById("predDisplay").innerHTML =
+                    `<div class="placeholder" style="color:#ef4444">错误: ${e.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "识别";
+            }
+        }
+
+        function showResult(result) {
+            // 显示预测数字和置信度
+            document.getElementById("predDisplay").innerHTML = `
+                <div class="prediction-number">${result.prediction}</div>
+                <div class="confidence">置信度: ${(result.confidence * 100).toFixed(1)}%</div>
+            `;
+
+            // 显示概率分布条形图
+            const probs = result.probabilities;
+            const maxIdx = result.prediction;
+            let html = "";
+            for (let i = 0; i < 10; i++) {
+                const pct = (probs[i] * 100).toFixed(1);
+                const width = Math.max(probs[i] * 100, 0.5);
+                const highlight = i === maxIdx ? " highlight" : "";
+                html += `
+                    <div class="prob-bar-row">
+                        <span class="prob-label">${i}</span>
+                        <div class="prob-bar-bg">
+                            <div class="prob-bar${highlight}" style="width:${width}%"></div>
+                        </div>
+                        <span class="prob-value">${pct}%</span>
+                    </div>
+                `;
+            }
+            document.getElementById("probChart").innerHTML = html;
+        }
+
+        // ========== 服务状态检查 ==========
+
+        async function checkService() {
+            const apiUrl = document.getElementById("apiUrl").value;
+            const dot = document.getElementById("statusDot");
+            const text = document.getElementById("statusText");
+
+            try {
+                // 检查服务是否可用
+                const resp = await fetch(`${apiUrl}/tasks?type=inference`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+                const tasks = await resp.json();
+                const runningTasks = tasks.filter(t => t.status === "running");
+
+                // 填充任务下拉框
+                const select = document.getElementById("taskSelect");
+                select.innerHTML = "";
+
+                if (runningTasks.length > 0) {
+                    runningTasks.forEach(t => {
+                        const opt = document.createElement("option");
+                        opt.value = t.id;
+                        opt.textContent = `${t.name} (${t.id})`;
+                        select.appendChild(opt);
+                    });
+                    currentTaskId = runningTasks[0].id;
+                    dot.className = "status-dot ok";
+                    text.textContent = `服务就绪，${runningTasks.length} 个推理任务运行中`;
+                } else {
+                    select.innerHTML = '<option value="">无运行中的推理任务</option>';
+                    currentTaskId = null;
+                    dot.className = "status-dot err";
+                    text.textContent = "没有运行中的推理任务。请先通过 API 或 Notebook 创建一个 type=inference 任务。";
+                }
+            } catch (e) {
+                const dot = document.getElementById("statusDot");
+                const text = document.getElementById("statusText");
+                dot.className = "status-dot err";
+                text.textContent = `无法连接服务: ${e.message}`;
+                document.getElementById("taskSelect").innerHTML =
+                    '<option value="">连接失败</option>';
+                currentTaskId = null;
+            }
+        }
+
+        function selectTask() {
+            currentTaskId = document.getElementById("taskSelect").value || null;
+        }
+
+        // 页面加载时检查服务
+        checkService();
+    </script>
+</body>
+</html>

@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .tasks import TaskManager, TaskType
@@ -50,6 +51,14 @@ def create_app() -> FastAPI:
         logger.info("Orchestrator 关闭")
 
     app = FastAPI(title="Orchestrator", lifespan=lifespan)
+
+    # 允许 Web 页面跨域访问 API（本地开发用）
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # 配置日志格式
     logging.basicConfig(
