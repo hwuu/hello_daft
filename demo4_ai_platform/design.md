@@ -29,6 +29,8 @@
   - [6.1 Level 1: 单机单任务](#61-level-1-单机单任务)
   - [6.2 Level 2: 单机多任务](#62-level-2-单机多任务)
   - [6.3 Level 3: 多机多任务](#63-level-3-多机多任务)
+  - [6.4 Ray on K8s 的能力边界](#64-ray-on-k8s-的能力边界)
+  - [6.5 多租户与资源分配](#65-多租户与资源分配)
 - [参考文献](#参考文献)
 
 ## 1. 背景与目标
@@ -695,6 +697,112 @@ Ray 集群部署在 K8s 上，存储切换到共享对象存储。
 | Compute | Ray Task → Ray Task on K8s |
 | Serving | Ray Serve → Ray Serve on K8s |
 | Storage | `./lance_storage/` → `s3://bucket/lance_storage/` |
+
+### 6.4 Ray on K8s 的能力边界
+
+Ray 的定位是**分布式计算运行时**，不是完整的任务编排平台。理解它做什么、不做什么，有助于在 Level 3 架构中合理分工。
+
+#### 隔离性
+
+Ray 的隔离是**进程级**的，不是容器级的：
+
+- 每个 Worker 是独立进程，内存隔离
+- 在 K8s 上，KubeRay 把每个 Worker 放在独立 Pod 里，跨节点有 Pod 级隔离
+- 但同一个 Worker 进程可以跑多个 Task，这些 Task 之间没有隔离
+
+Ray 不做安全沙箱级的任务隔离。设计假设是**单信任域**——同一个团队的协作任务，不是多租户平台。如果需要多租户隔离，做法是每个租户跑独立的 Ray 集群。
+
+#### 资源声明
+
+CPU/GPU/内存是一等资源，可以在 `@ray.remote` 上声明：
+
+```python
+@ray.remote(num_cpus=4, num_gpus=1, memory=8 * 1024**3)
+def train_model(input_path, output_path, params):
+    ...
+```
+
+- 还支持自定义资源（如 `resources={"TPU": 1}`）
+- KubeRay 会把 Ray 的资源请求映射到 K8s Pod 的 resource requests
+- Ray Autoscaler 在资源不足时自动向 K8s 申请新 Pod
+
+**网络带宽不是一等资源。** 网络带宽难以精确度量和独占分配，硬隔离需要依赖底层（K8s NetworkPolicy、CNI 插件），Ray 选择不管这层。
+
+#### 生命周期管理
+
+| 能力 | Ray Tasks | Ray Workflows |
+|------|-----------|---------------|
+| 提交 | `task.remote()` | `workflow.run()` |
+| 状态查询 | `ray.get()` 阻塞等待 | `workflow.get_status()` |
+| 重试 | `@ray.remote(max_retries=3)` | step 级别重试 |
+| 取消 | `ray.cancel(ref)` 协作式 | `workflow.cancel()` |
+| 故障恢复 | 无（内存丢了就丢了） | 从 checkpoint 恢复 |
+| 挂起/继续 | 不支持 | 不支持 |
+
+**挂起/继续不做。** 暂停一个分布式计算需要序列化任意 Python 运行时状态（调用栈、锁、网络连接、GPU 上下文），这是应用特定的，通用方案做不了。如果需要"暂停"，只能靠应用自己 checkpoint 然后重新提交。
+
+**取消是协作式的。** `ray.cancel()` 发 SIGTERM，Task 需要自己处理信号退出。不能强杀，因为强杀可能导致 GPU 显存泄漏、文件写一半等问题。
+
+#### 职责分工
+
+| 关注点 | 谁负责 |
+|--------|--------|
+| 容器隔离、网络策略 | K8s |
+| 计算调度、资源分配 | Ray |
+| 复杂 DAG 编排、定时调度 | Airflow / Prefect |
+| 持久化任务队列 | 外部消息队列 |
+
+Ray 不是要替代 K8s，而是在 K8s 之上提供一层对 ML 友好的计算抽象——用户不用关心 Pod 怎么调度，只需要声明"我要 4 CPU + 1 GPU"，Ray + KubeRay 搞定剩下的。
+
+### 6.5 多租户与资源分配
+
+Level 3 部署在 K8s 上后，自然会面临多租户问题。Ray 本身不做多租户，隔离和资源管理交给 K8s。
+
+#### 隔离方案
+
+| 方案 | 隔离强度 | 资源利用率 | 适用场景 |
+|------|----------|-----------|----------|
+| 共享 Ray 集群 + 逻辑隔离 | 弱（进程级） | 高 | 内部团队 |
+| 每租户独立 Ray 集群 | 中（Pod + Namespace） | 中 | 企业多部门 / SaaS |
+| 每租户独立 K8s 集群 | 强（集群级） | 低 | 强合规（金融、医疗） |
+
+推荐方案是**每租户独立 Ray 集群**：
+
+```
+K8s Cluster
+├── Namespace: tenant-a
+│   ├── RayCluster A (KubeRay CR)
+│   ├── Server Pod A
+│   └── NetworkPolicy (deny cross-namespace)
+├── Namespace: tenant-b
+│   ├── RayCluster B (KubeRay CR)
+│   ├── Server Pod B
+│   └── NetworkPolicy (deny cross-namespace)
+└── S3 (IAM per tenant)
+```
+
+隔离靠 K8s 原生能力（Namespace、NetworkPolicy、IAM），Ray 不需要感知多租户。KubeRay 天然支持一个 K8s 集群里跑多个 RayCluster CR，运维上就是多一份 YAML。空闲时 Autoscaler 可以缩容到 0，节省资源。
+
+#### 资源分配策略
+
+| 策略 | 做法 | 适用场景 |
+|------|------|----------|
+| 静态配额 | K8s ResourceQuota 写死上限 | 负载稳定 |
+| Guaranteed + Burstable | requests 保底 + limits 上限 | 负载波动大（推荐） |
+| Preemption | K8s PriorityClass 高优先级驱逐低优先级 | 资源紧张且有明确优先级 |
+
+推荐 **Guaranteed + Burstable**——每个租户有保底资源（requests），超出部分按集群余量弹性分配：
+
+| 租户 | 保底 (requests) | 上限 (limits) |
+|------|----------------|---------------|
+| A | 8 CPU, 1 GPU | 32 CPU, 4 GPU |
+| B | 4 CPU, 0 GPU | 16 CPU, 2 GPU |
+
+#### 抢占
+
+K8s PriorityClass 支持跨租户抢占（高优先级 Pod 驱逐低优先级 Pod），但 Ray 自身不感知抢占——K8s 杀 Pod 后 Ray 只看到 Worker 丢了，触发 fault tolerance。这意味着被抢占的训练任务如果没做 checkpoint，进度全丢。所以抢占场景下，训练脚本必须自己做 epoch 级 checkpoint。
+
+> 多租户是 Level 3 之上的进阶话题，本项目不涉及实现。
 
 ## 参考文献
 
