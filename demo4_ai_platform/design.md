@@ -87,107 +87,87 @@
 
 ### 2.2 部署级别
 
-根据负载规模，系统有三个部署级别。架构不变，只是底层运行时逐步升级：
+根据负载规模，系统有三个部署级别。Server API 层不变，底层四个维度逐步升级：
+
+| 维度 | Level 1 | Level 2 | Level 3 |
+|------|---------|---------|---------|
+| **Compute** | Daft local runner | Daft on Ray | Daft on Ray (K8s) |
+| **Scheduling** | Sequential (in-memory) | Ray Tasks (concurrent) | Ray Workflows (persistent) |
+| **Serving** | User script (subprocess) | Ray Serve | Ray Serve on K8s |
+| **Storage** | Lance local files | Lance local files | Lance on S3/MinIO |
 
 #### Level 1: 单机单任务
 
 最简部署，适合开发调试和小规模数据（如 MNIST）。
 
 ```
-+----------------------------+
-|  Single Machine            |
-|                            |
-|  Server (FastAPI, :8000)   |
-|  +----------------------+  |
-|  | Task: sequential     |  |
-|  | Daft: local runner   |  |
-|  | Lance: local files   |  |
-|  | Serving: user script |  |
-|  +----------------------+  |
-+----------------------------+
+Server (FastAPI, :8000)
++----------------------------------------------+
+|  Compute:     Daft local runner, sequential   |
+|  Scheduling:  In-memory state machine         |
+|  Serving:     User script (FastAPI subprocess)|
+|  Storage:     Lance local files               |
++----------------------------------------------+
 ```
 
-- **计算**：Daft 本地执行（默认 runner），任务串行
-- **存储**：Lance 文件在本地磁盘
-- **推理**：用户脚本启动 FastAPI 子服务
-- **任务调度**：内存中的状态机，同一时间只运行一个任务
-- **依赖**：不需要 Ray，不需要 K8s
+- 任务串行执行，内存中维护状态
+- 推理服务由用户脚本自行启动 FastAPI 子进程
+- 依赖：不需要 Ray，不需要 K8s
 
 #### Level 2: 单机多任务
 
 引入 Ray 作为本地运行时，支持并发任务和资源隔离。
 
 ```
-+-----------------------------------------+
-|  Single Machine                         |
-|                                         |
-|  Server (FastAPI, :8000)                |
-|  +-----------------------------------+  |
-|  |  Ray (local cluster)              |  |
-|  |  +--------+ +--------+ +-------+  |  |
-|  |  | Task 1 | | Task 2 | | Serve |  |  |
-|  |  | (Daft) | | (Train)| | (Ray  |  |  |
-|  |  |        | |        | | Serve)|  |  |
-|  |  +--------+ +--------+ +-------+  |  |
-|  +-----------------------------------+  |
-|  Lance: local files                     |
-+-----------------------------------------+
+Server (FastAPI, :8000)
++----------------------------------------------+
+|  Compute:     Daft on Ray (local cluster)     |
+|  Scheduling:  Ray Tasks / Actors (concurrent) |
+|  Serving:     Ray Serve (multi-model)         |
+|  Storage:     Lance local files               |
++----------------------------------------------+
 ```
 
-- **计算**：Daft 切换 Ray runner（`set_runner_ray()`），多任务并发
-- **存储**：Lance 文件仍在本地磁盘
-- **推理**：Ray Serve 管理模型副本，支持多模型同时服务
-- **任务调度**：Ray Tasks/Actors 提供并发和资源隔离
-- **依赖**：需要 Ray，不需要 K8s
+- Daft 切换 Ray runner（`set_runner_ray()`），多任务并发
+- Ray Serve 管理模型副本，支持多模型同时服务
+- 依赖：需要 Ray，不需要 K8s
 
 **Level 1 → 2 的改动点：**
 
-| 组件 | 改动 |
+| 维度 | 改动 |
 |------|------|
-| Daft | `daft.context.set_runner_ray()` |
-| 任务调度 | 内存状态机 → Ray Tasks |
-| 推理 | FastAPI 单进程 → Ray Serve |
-| 代码改动量 | 小：切换 runner + 任务提交方式 |
+| Compute | `daft.context.set_runner_ray()` |
+| Scheduling | 内存状态机 → Ray Tasks |
+| Serving | FastAPI subprocess → Ray Serve |
+| Storage | 不变 |
 
 #### Level 3: 多机多任务
 
 Ray 集群部署在 K8s 上，存储切换到共享对象存储。
 
 ```
-+------------------+     +------------------+
-|  K8s Node 1      |     |  K8s Node 2      |
-|  +-------------+ |     |  +-------------+ |
-|  | Ray Worker  | |     |  | Ray Worker  | |
-|  | (Daft tasks)| |     |  | (Training)  | |
-|  +-------------+ |     |  +-------------+ |
-|  +-------------+ |     |  +-------------+ |
-|  | Ray Serve   | |     |  | Ray Serve   | |
-|  | (Inference) | |     |  | (Inference) | |
-|  +-------------+ |     |  +-------------+ |
-+------------------+     +------------------+
-         |                        |
-         v                        v
-+-------------------------------------------+
-|  Shared Storage (MinIO / S3)              |
-|  Lance files: s3://bucket/lance_storage/  |
-+-------------------------------------------+
+Server (FastAPI, :8000)
++----------------------------------------------+
+|  Compute:     Daft on Ray (K8s, auto-scaling) |
+|  Scheduling:  Ray Workflows (persistent)      |
+|  Serving:     Ray Serve on K8s (multi-replica)|
+|  Storage:     Lance on S3/MinIO (shared)      |
++----------------------------------------------+
 ```
 
-- **计算**：Ray on K8s，自动扩缩容
-- **存储**：Lance 文件在 S3/MinIO，多节点共享
-- **推理**：Ray Serve 多副本，K8s 负载均衡
-- **任务调度**：Ray Workflows 持久化任务状态
-- **依赖**：需要 Ray、K8s、MinIO/S3
+- Ray on K8s 自动扩缩容，多节点并行
+- Ray Workflows 持久化任务状态，支持故障恢复
+- Lance 文件在 S3/MinIO 上，多节点共享
+- 依赖：需要 Ray、K8s、MinIO/S3
 
 **Level 2 → 3 的改动点：**
 
-| 组件 | 改动 |
+| 维度 | 改动 |
 |------|------|
-| Ray | 本地集群 → K8s KubeRay Operator |
-| 存储路径 | `./lance_storage/` → `s3://bucket/lance_storage/` |
-| 任务调度 | Ray Tasks → Ray Workflows（持久化） |
-| 推理 | Ray Serve 本地 → Ray Serve on K8s |
-| 代码改动量 | 小：改存储路径 + 部署配置 |
+| Compute | Ray 本地集群 → KubeRay Operator |
+| Scheduling | Ray Tasks → Ray Workflows |
+| Serving | Ray Serve 本地 → Ray Serve on K8s |
+| Storage | `./lance_storage/` → `s3://bucket/lance_storage/` |
 
 ### 2.3 可定制性设计
 
