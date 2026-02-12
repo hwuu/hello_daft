@@ -473,7 +473,6 @@ demo4_ai_platform/
 ├── design.md                    # 本文档
 ├── README.md
 ├── requirements.txt
-├── config.yaml                  # 配置文件（存储路径等）
 ├── lance_storage/               # 数据湖根目录（共享存储，gitignored）
 │   ├── datasets/
 │   └── models/
@@ -501,8 +500,7 @@ demo4_ai_platform/
 4. `mnist/mnist_clean.py` — MNIST 清洗脚本（实现 `run()` 接口）
 5. `mnist/mnist_cnn.py` — PyTorch CNN 训练脚本（实现 `run()` 接口）
 6. `mnist/mnist_serve.py` — 推理服务脚本（实现 `run()` 接口，启动 FastAPI 子服务）
-7. `config.yaml` — 配置文件
-8. 单元测试
+7. 单元测试
 
 ### 5.3 技术选型
 
@@ -516,12 +514,13 @@ demo4_ai_platform/
 
 ### 5.4 配置
 
-```yaml
-# config.yaml
-server:
-  host: "http://localhost:8000"    # 服务地址
-  storage_path: "./lance_storage"  # 数据湖根目录
-```
+默认值内置在 `server/app.py` 中：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `storage_path` | `./lance_storage` | 数据湖根目录 |
+
+`create_app(storage_path=...)` 可在代码中覆盖。
 
 Level 1 下任务状态存储在内存中。Level 2+ 切换到 Ray 后，任务状态由 Ray Tasks/Workflows 管理。
 
@@ -649,6 +648,58 @@ def _execute(self, task_id, script, input_path, output_path, params):
     self._tasks[task_id]["status"] = "completed"
     self._tasks[task_id]["result"] = result
 ```
+
+**流式处理示例：**
+
+Level 1 下，数据入库和训练是两个独立任务，中间结果写 Lance 文件：
+
+```
+POST /tasks  {script: "mnist_clean.py", output: "mnist_clean.lance"}
+# 等完成...
+POST /tasks  {script: "mnist_cnn.py", input: "mnist_clean.lance", ...}
+```
+
+Level 2 下，用户可以编写端到端脚本，在同一个 Daft on Ray 执行图里完成清洗和训练，中间数据在内存中流转不落盘：
+
+```python
+# mnist/mnist_e2e.py — 端到端流式处理（Level 2）
+def run(input_path: str, output_path: str, params: dict) -> dict:
+    import daft
+    from daft import col
+
+    # 阶段 1: 数据清洗（CPU）
+    # Daft lazy evaluation，此时只构建计算图，不执行
+    df = load_mnist_idx(input_path)
+    if params.get("normalize"):
+        df = df.with_column("image", col("image") / 255.0)
+    df = df.where(col("label").between(0, 9))
+
+    # 阶段 2: 训练（GPU）
+    # .to_pandas() 触发执行，数据在 Ray 集群内存中流转
+    # 清洗结果不写 Lance，直接进训练
+    train_data = df.where(col("split") == "train").to_pandas()
+    test_data = df.where(col("split") == "test").to_pandas()
+
+    model = MnistCNN()
+    train_model(model, train_data, params)
+    metrics = evaluate_model(model, test_data)
+
+    # 只有最终结果写 Lance
+    save_model(model, metrics, params, output_path)
+
+    return {"accuracy": metrics["accuracy"], "loss": metrics["loss"]}
+```
+
+两种方式对比：
+
+| | 分开两个 Task | 单个 e2e 脚本 |
+|---|---|---|
+| 中间数据 | 写 Lance 文件 | 内存中流转 |
+| 调度 | 两次 HTTP 调用 | 一次 |
+| 灵活性 | 可单独重跑清洗或训练 | 必须一起跑 |
+| 适用场景 | 开发调试、数据复用 | 生产跑批、追求性能 |
+
+平台 API 不变，流式编排由用户脚本自己实现。Daft on Ray 的优势（内存流式、异构调度）在用户脚本内部自然生效。
 
 ### 6.3 Level 3: 多机多任务
 

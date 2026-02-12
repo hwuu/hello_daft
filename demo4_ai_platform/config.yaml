@@ -1,3 +1,0 @@
-server:
-  host: "http://localhost:8000"
-  storage_path: "./lance_storage"

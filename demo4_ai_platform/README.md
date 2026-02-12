@@ -50,7 +50,6 @@ curl -X POST http://localhost:8000/api/v1/tasks \
 ```
 demo4_ai_platform/
 ├── design.md                    # 设计文档
-├── config.yaml                  # 配置文件
 ├── requirements.txt
 ├── 01_ai_platform_tutorial.ipynb
 ├── mnist/                       # 用户脚本 + Web Demo

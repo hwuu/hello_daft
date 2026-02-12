@@ -11,7 +11,6 @@ AI Platform HTTP API 模块。
 import logging
 from contextlib import asynccontextmanager
 
-import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,32 +24,21 @@ logger = logging.getLogger(__name__)
 _storage: Storage | None = None
 _runner: TaskRunner | None = None
 
-
-def _load_config() -> dict:
-    """加载配置文件。找不到时使用默认值。"""
-    try:
-        with open("config.yaml") as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        logger.warning("未找到 config.yaml，使用默认配置")
-        return {"server": {"host": "http://localhost:8000", "storage_path": "./lance_storage"}}
+DEFAULT_STORAGE_PATH = "./lance_storage"
 
 
 def create_app(storage_path: str | None = None) -> FastAPI:
     """创建 AI Platform FastAPI 应用。
 
     Args:
-        storage_path: 数据湖根目录路径（为 None 时从 config.yaml 读取）
+        storage_path: 数据湖根目录路径（默认 ./lance_storage）
     """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """应用生命周期管理：启动时初始化存储和执行器。"""
         global _storage, _runner
-        path = storage_path
-        if path is None:
-            config = _load_config()
-            path = config.get("server", {}).get("storage_path", "./lance_storage")
+        path = storage_path or DEFAULT_STORAGE_PATH
         _storage = Storage(path)
         _runner = TaskRunner()
         logger.info(f"AI Platform 启动完成，存储路径: {path}")
