@@ -3,5 +3,6 @@ lancedb>=0.15.0
 fastapi>=0.115.0
 uvicorn>=0.34.0
 httpx>=0.28.0
-pyyaml>=6.0
 torch>=2.0.0
+ray>=2.9.0           # Level 2/3: 分布式执行后端
+matplotlib>=3.7.0    # notebook 可视化

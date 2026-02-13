@@ -78,17 +78,17 @@
 平台的核心思路是**平台只做调度和存储，业务逻辑全部交给用户脚本**。
 
 ```
-用户脚本 (run())                    平台 (Server)
-+------------------+               +------------------+
-| 清洗逻辑          |  ← run() →   | 任务调度          |
-| 训练代码          |               | 生命周期管理       |
-| 推理服务          |               | 状态查询          |
-+--------+---------+               +--------+---------+
-         |                                  |
-         v                                  v
+用户脚本 (run())                  平台 (Server)
++------------------+             +------------------+
+| 清洗逻辑          |  ← run() →  | 任务调度          |
+| 训练代码          |             | 生命周期管理       |
+| 推理服务          |             | 状态查询          |
++--------+---------+             +--------+---------+
+         |                                |
+         v                                v
 +--------------------------------------------------+
-|              Lance 数据湖                          |
-|  datasets/*.lance          models/*.lance          |
+|              Lance 数据湖                         |
+|  datasets/*.lance          models/*.lance        |
 +--------------------------------------------------+
 ```
 
@@ -172,8 +172,8 @@
 |  +----------------------------------------------------------------+  |
 |  |  Server (RESTful API: FastAPI)                                 |  |
 |  |  +----------------------------------------------------------+  |  |
-|  |  | Runner             | Storage          | API Routes        |  |  |
-|  |  | (Script Executor)  | (Lance + LanceDB)| (REST)            |  |  |
+|  |  | Runner             | Storage          | API Routes       |  |  |
+|  |  | (Script Executor)  | (Lance + LanceDB)| (REST)           |  |  |
 |  |  +----------------------------------------------------------+  |  |
 |  |  +-----------------+  +--------------------+  +--------------+ |  |
 |  |  | Daft            |  | Ray                |  | Lance +      | |  |
@@ -713,23 +713,23 @@ demo4_ai_platform/
 ├── README.md                    # 教学入口
 ├── requirements.txt
 ├── notebooks/                   # 教学 notebook
-│   ├── 01_level1_tutorial.ipynb
-│   └── 02_level2_ray.ipynb
+│   ├── 01_level1_local.ipynb
+│   └── 02_level2_distributed.ipynb
 ├── ai_platform/                 # 平台源码
-│   ├── README.md               # 本文档
-│   ├── app.py                  # FastAPI 主应用（API 路由）
-│   ├── storage.py              # Lance 读写封装
-│   ├── runner.py               # Runner 基类 + 工厂函数
+│   ├── README.md                # 本文档
+│   ├── app.py                   # FastAPI 主应用（API 路由）
+│   ├── storage.py               # Lance 读写封装
+│   ├── runner.py                # Runner 基类 + 工厂函数
 │   ├── runners/
-│   │   ├── local.py            # Level 1: 线程执行
-│   │   └── ray.py              # Level 2/3: Ray Task 执行
-│   └── tests/                  # 单元测试
+│   │   ├── local.py             # Level 1: 线程执行
+│   │   └── ray.py               # Level 2/3: Ray Task 执行
+│   └── tests/                   # 单元测试
 ├── mnist/                       # 用户脚本 + Web Demo（平台用户编写）
-│   ├── mnist_clean.py          # MNIST 清洗脚本
-│   ├── mnist_cnn.py            # MNIST CNN 训练脚本
-│   ├── mnist_e2e.py            # 端到端流式处理（Level 2）
-│   ├── mnist_serve.py          # MNIST 推理服务脚本
-│   └── index.html              # 手写数字识别 Web Demo
+│   ├── mnist_clean.py           # MNIST 清洗脚本
+│   ├── mnist_cnn.py             # MNIST CNN 训练脚本
+│   ├── mnist_e2e.py             # 端到端流式处理（Level 2）
+│   ├── mnist_serve.py           # MNIST 推理服务脚本
+│   └── index.html               # 手写数字识别 Web Demo
 └── .ai_platform/                # 运行时数据（gitignored）
     ├── download/
     ├── datasets/
