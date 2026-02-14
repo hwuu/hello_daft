@@ -60,7 +60,7 @@ class RayRunner(BaseRunner):
 if _RAY_AVAILABLE:
     @ray.remote
     def _ray_execute(script: str, input_path: str, output_path: str, params: dict) -> dict:
-        """在 Ray Worker 上执行用户脚本。"""
-        daft.context.set_runner_ray()
+        """在 Ray Worker 上执行用户脚本。使用 Daft native runner（非 Ray runner），
+        避免多个并发 Task 共享 FlotillaRunner actor 导致 plan ID 冲突。"""
         run_fn = _load_run_function(script)
         return run_fn(input_path, output_path, params)

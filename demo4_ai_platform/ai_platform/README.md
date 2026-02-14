@@ -455,7 +455,7 @@ Lance 作为统一存储格式，数据集和模型都存在数据湖中：
 +--------------------------------------------------------------------+
 ```
 
-- Daft 切换 Ray runner（`set_runner_ray()`），多任务并发
+- Ray Task 并发调度，Daft 在 Worker 内用 native runner 读取数据
 - Ray Serve 管理模型副本，支持多模型同时服务
 - 依赖：需要 Ray，不需要 K8s
 
@@ -486,7 +486,6 @@ Level 2 改为提交 Ray Task，Daft 计算也自动分布到 Ray 集群：
 # Level 2: runner.py — Ray Task 执行
 @ray.remote
 def _run_script(script: str, input_path: str, output_path: str, params: dict) -> dict:
-    daft.context.set_runner_ray()
     fn = _load_run_function(script)
     return fn(input_path, output_path, params)
 
@@ -506,47 +505,6 @@ POST /tasks  {script: "mnist_clean.py", output: "mnist_clean.lance"}
 # 等完成...
 POST /tasks  {script: "mnist_cnn.py", input: "mnist_clean.lance", ...}
 ```
-
-Level 2 下，用户可以编写端到端脚本 `mnist_e2e.py`，通过嵌套 Ray Task 实现流式处理和资源分步：
-
-```python
-# mnist/mnist_e2e.py — 嵌套 Ray Task，每个 step 独立声明资源
-
-@ray.remote(num_cpus=2)
-def clean_step(input_path: str) -> dict:
-    """阶段 1: 数据清洗（轻量 CPU）"""
-    df = daft.read_lance(input_path)
-    train_pdf = df.where(col("split") == "train").to_pandas()
-    test_pdf = df.where(col("split") == "test").to_pandas()
-    return {"train": train_pdf.to_dict("list"), "test": test_pdf.to_dict("list")}
-
-@ray.remote(num_cpus=4)  # 如果有 GPU: train_step.options(num_gpus=1).remote(...)
-def train_step(clean_data: dict, output_path: str, params: dict) -> dict:
-    """阶段 2: 模型训练（重量 CPU，可选 GPU）"""
-    model = MnistCNN()
-    # ... 训练 ...
-    save_model(model, output_path, params, metrics)
-    return {"accuracy": metrics["accuracy"]}
-
-def run(input_path, output_path, params):
-    # run() 是轻量协调者，不做计算
-    clean_ref = clean_step.remote(input_path)
-    # clean_ref 作为依赖传入，Ray 自动等 clean_step 完成后再调度 train_step
-    train_ref = train_step.remote(clean_ref, output_path, params)
-    return ray.get(train_ref)
-```
-
-关键点：每个 step 是独立的 Ray Task，清洗用 2 CPU，训练用 4 CPU（可加 GPU）。清洗完释放资源，训练时再申请。中间数据通过 Ray 对象存储传递，不写 Lance。
-
-两种方式对比：
-
-| | 分开两个 Task | 嵌套 Ray Task (e2e) |
-|---|---|---|
-| 中间数据 | 写 Lance 文件 | Ray 对象存储，内存中流转 |
-| 资源 | 每个 Task 一套 | 每个 step 独立声明 |
-| GPU 占用 | 清洗 Task 不需要 GPU | 只有 train_step 申请 GPU |
-| 调度 | 两次 HTTP 调用 | 一次，内部 Ray 自动编排 |
-| 灵活性 | 可单独重跑清洗或训练 | 必须一起跑 |
 
 平台 API 不变，流式编排和资源分步由用户脚本自己实现。平台只负责调用 `run()`，不感知内部的 Ray Task 嵌套。
 
@@ -727,7 +685,6 @@ demo4_ai_platform/
 ├── mnist/                       # 用户脚本 + Web Demo（平台用户编写）
 │   ├── mnist_clean.py           # MNIST 清洗脚本
 │   ├── mnist_cnn.py             # MNIST CNN 训练脚本
-│   ├── mnist_e2e.py             # 端到端流式处理（Level 2）
 │   ├── mnist_serve.py           # MNIST 推理服务脚本
 │   └── index.html               # 手写数字识别 Web Demo
 └── .ai_platform/                # 运行时数据（gitignored）

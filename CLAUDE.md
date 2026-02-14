@@ -79,3 +79,4 @@ nbstripout --status
 - `is_null()` 返回 Bool 类型，不能直接 `.sum()`，需先 `.cast(daft.DataType.int64())` 再 `.sum()`
 - `column_names` 是属性不是方法，不要加括号
 - `over()` 需要传入 `Window` 对象，不能直接传 Expression，用法：`col("x").mean().over(Window().partition_by("y"))`
+- Ray 后端切换用 `daft.set_runner_ray()`，不是 `daft.context.set_runner_ray()`

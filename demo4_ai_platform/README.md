@@ -70,7 +70,6 @@ demo4_ai_platform/
 ├── mnist/                       # 用户脚本 + Web Demo（平台用户编写）
 │   ├── mnist_clean.py          # MNIST 数据清洗
 │   ├── mnist_cnn.py            # CNN 训练
-│   ├── mnist_e2e.py            # 端到端流式处理（Level 2）
 │   ├── mnist_serve.py          # 推理服务
 │   └── index.html              # 手写数字识别 Web Demo
 └── .ai_platform/                # 运行时数据（gitignored）
